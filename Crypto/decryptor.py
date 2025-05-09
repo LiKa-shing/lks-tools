@@ -2,6 +2,7 @@ from cryptography.hazmat.primitives import hashes, padding
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import serialization
+import hashlib
 
 def decrypt_file(
     input_path: str,
@@ -15,6 +16,7 @@ def decrypt_file(
         key_len = int.from_bytes(f_in.read(4), 'big')     # 4字节密钥长度
         encrypted_aes_key = f_in.read(key_len)            # RSA 加密后的 AES key
         iv = f_in.read(16)                                # 16字节 IV
+        orig_hash = f_in.read(32)   # 读取加密时写入的源文件 SHA256
 
         # 2. 加载私钥
         with open(private_key_path, "rb") as key_file:
@@ -39,6 +41,7 @@ def decrypt_file(
         unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
 
         # 5. 分块解密并去填充，写入明文
+        sha256 = hashlib.sha256()
         with open(output_path, "wb") as f_out:
             # 5.1 先对所有 decryptor.update() 的输出进行 unpadder.update()
             while True:
@@ -48,6 +51,7 @@ def decrypt_file(
                 decrypted = decryptor.update(chunk)
                 # 解密后可能还包括填充字节，送给 unpadder
                 f_out.write(unpadder.update(decrypted))
+                sha256.update(unpadder.update(decrypted))
 
             # 5.2 finalize 解密器，处理残留的最后一块
             decrypted_final = decryptor.finalize()
@@ -55,3 +59,7 @@ def decrypt_file(
             data = unpadder.update(decrypted_final)
             data += unpadder.finalize()
             f_out.write(data)
+            sha256.update(data)
+
+        if sha256.digest() != orig_hash:
+            raise ValueError("文件校验失败：SHA256 不匹配！解密出的内容可能被篡改或损坏。")
